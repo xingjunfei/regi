@@ -15,11 +15,13 @@ import com.itheima.entity.SetmealDish;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 @RestController
 @RequestMapping("/setmeal")
@@ -34,6 +36,10 @@ public class SetmealControl {
 
     @Autowired
     private CategoryService categoryService;
+
+    @Autowired
+    private RedisTemplate redisTemplate;
+
     @GetMapping("/page")
     public R<Page> page(Integer page,Integer pageSize,String name)
     {
@@ -69,6 +75,9 @@ public class SetmealControl {
     @Transactional
     public R<String> save(@RequestBody  SetmealDto setmealDto)
     {
+        //redis 优化
+        String key="steal_"+setmealDto.getCategoryId()+"_"+setmealDto.getStatus();
+
         System.out.println(setmealDto.getId());
         boolean save = setmealService.save(setmealDto);
         if(!save)
@@ -93,6 +102,8 @@ public class SetmealControl {
                 return R.error("保存失败");
             }
         }
+        Boolean delete = redisTemplate.delete(key);
+        log.info("执行了添加操作，要删除缓存,执行结果: {}",delete);
         return R.success("保存成功");
     }
 
@@ -116,6 +127,10 @@ public class SetmealControl {
     @PutMapping
     public R<String> update2(@RequestBody SetmealDto setmealDto)
     {
+        //redis 优化
+        Setmeal serviceById = setmealService.getById(setmealDto.getId());
+        String key="steal_"+setmealDto.getCategoryId()+"_"+serviceById.getStatus();
+
         Setmeal setmeal = new Setmeal();
         BeanUtils.copyProperties(setmealDto,setmeal);
         boolean save = setmealService.updateById(setmeal);
@@ -136,6 +151,9 @@ public class SetmealControl {
             setmealDish.setSetmealId(id);
             setmealDishService.save(setmealDish);
         }
+
+        Boolean delete = redisTemplate.delete(key);
+        log.info("执行了修改操作，要删除缓存,执行结果: {}",delete);
         return R.success("修改成功");
     }
 
@@ -143,6 +161,7 @@ public class SetmealControl {
     @Transactional
     public R<String> del(String ids)
     {
+
         String[] split = ids.split(",");
         if(split==null)
         {
@@ -193,10 +212,25 @@ public class SetmealControl {
     @GetMapping("/list")
     public R<List<Setmeal>> list(Setmeal setmeal)
     {
+        //redis 优化
+        List<Setmeal> setmealList=null;
+        String key="steal_"+setmeal.getCategoryId()+"_"+setmeal.getStatus();
+
+        setmealList  = ( List<Setmeal> )redisTemplate.opsForValue().get(key);
+        if(setmealList!=null)
+        {
+            //说明缓存中有数据，不用去数据库查了，直接返回缓存中的数据
+            return R.success(setmealList);
+        }
+
+        //否则，就去数据数据库中查，还要再写入缓存中
         LambdaUpdateWrapper<Setmeal> lambdaUpdateWrapper = new LambdaUpdateWrapper<>();
         lambdaUpdateWrapper.eq(setmeal.getCategoryId()!=null,Setmeal::getCategoryId,setmeal.getCategoryId());
         lambdaUpdateWrapper.eq(setmeal.getStatus()!=null,Setmeal::getStatus,setmeal.getStatus());
-        List<Setmeal> setmealList = setmealService.list(lambdaUpdateWrapper);
+         setmealList = setmealService.list(lambdaUpdateWrapper);
+
+         //执行写入缓存操作
+        redisTemplate.opsForValue().set(key,setmealList,60, TimeUnit.MINUTES);
         return R.success(setmealList);
     }
 
