@@ -14,7 +14,9 @@ spring:
     port: 6379
     password: xingxing100
     database: 0
-
+  cache:
+    redis:
+      time-to-live: 1800000 #缓存过期时间
 
 
 mybatis-plus:
